@@ -1,0 +1,84 @@
+{
+    "name": "ruvelo/security-advisories",
+    "description": "The framework-agnostic core behind Ruvelo's security alerts: reads lockfiles, matches Packagist and OSV advisories, marks what CISA KEV says is exploited, and tells you what changed.",
+    "keywords": [
+        "security",
+        "vulnerabilities",
+        "advisories",
+        "composer-audit",
+        "npm-audit",
+        "cisa-kev",
+        "osv",
+        "psr-18"
+    ],
+    "license": "MIT",
+    "type": "library",
+    "homepage": "https://github.com/Ruvelo/security-advisories",
+    "authors": [
+        {
+            "name": "François Bultez",
+            "homepage": "https://github.com/francoisbultez",
+            "role": "Developer"
+        }
+    ],
+    "require": {
+        "php": "^8.2",
+        "composer/semver": "^3.4",
+        "php-http/discovery": "^1.19",
+        "psr/http-client": "^1.0",
+        "psr/http-factory": "^1.0",
+        "psr/http-message": "^1.1|^2.0",
+        "psr/simple-cache": "^3.0"
+    },
+    "require-dev": {
+        "laravel/pint": "^1.18",
+        "nyholm/psr7": "^1.8",
+        "phpstan/phpstan": "^2.0",
+        "phpunit/phpunit": "^11.5|^12.0"
+    },
+    "suggest": {
+        "symfony/http-client": "A PSR-18 client for Symfony apps",
+        "guzzlehttp/guzzle": "A PSR-18 client for anything else",
+        "nyholm/psr7": "PSR-17 factories, if your app has none"
+    },
+    "autoload": {
+        "psr-4": {
+            "Ruvelo\\SecurityAdvisories\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Ruvelo\\SecurityAdvisories\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "phpunit",
+        "lint": "pint --test",
+        "format": "pint",
+        "analyse": "phpstan analyse --memory-limit=1G --no-progress",
+        "check": [
+            "@lint",
+            "@analyse",
+            "@test"
+        ]
+    },
+    "scripts-descriptions": {
+        "test": "Run the test suite",
+        "lint": "Check code style",
+        "format": "Fix code style",
+        "analyse": "Run static analysis",
+        "check": "Lint, analyse and test: what CI runs"
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "php-http/discovery": true
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true,
+    "support": {
+        "issues": "https://github.com/Ruvelo/security-advisories/issues",
+        "source": "https://github.com/Ruvelo/security-advisories"
+    }
+}
