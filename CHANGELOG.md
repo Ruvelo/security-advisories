@@ -6,6 +6,24 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+Planned as 1.1.0. Backwards compatible: 1.0 adapters keep working unchanged.
+
+### Added
+
+- `Valtry\ValtryAdvisorySource`: Composer and npm advisories, with their CISA KEV verdict, from Valtry's Advisory API in one request per ecosystem. Sends package names only (never versions) and a random nonce; verifies every answer's Ed25519 signature against keys pinned in `Valtry\Keys`, the echoed nonce and that every name is covered. Times out after 5 seconds and leaves Valtry alone for five minutes after a failure.
+- `Sources\FallbackAdvisorySource`: a primary source with fallbacks, per ecosystem. `Scanner::forProject()` now uses Valtry first and Packagist, OSV and CISA KEV directly when Valtry is unreachable, slow, answers with an error or a bad signature, or reports its data for that ecosystem as stale.
+- Opting out: `Scanner::forProject(source: 'public')` or `RUVELO_ADVISORIES_SOURCE=public` (which wins) keeps every request off Valtry. `Scanner::source()` says which path applies.
+- `Report::$source` (`valtry`, `public` or `mixed`) and `Report::$sources` per ecosystem, also in `toArray()`.
+- `Reconciler::next()` takes keys to leave unacknowledged, so an alert that couldn't be delivered is news again on the next check.
+- `Changes::$resolvedFindings` and `Changes::resolvedFinding()`: what a resolved finding was when last seen, from the new `Reconciler::lastSeen()` data passed to `reconcile()`. `Changes::$resolved` is unchanged.
+- `Finding::fromArray()`, the reverse of `toArray()`.
+- `Advisory::$kev` and `Advisory::$kevKnown`, for sources that know the KEV verdict themselves; the catalogue is then only downloaded for the rest.
+- `JsonClient::postJsonRaw()` and `JsonClient::withDeadline()`, `ResponseCache::put()`.
+
+### Security
+
+- Fail-closed: while `Valtry\Keys` holds a placeholder, nothing is sent to Valtry, and CI refuses to build a release tag.
+
 ## [1.0.0] - 2026-10-12
 
 First release: the logic of [Laravel Security Alerts](https://github.com/Ruvelo/laravel-security-alerts) and [Magento 2 Security Alerts](https://github.com/Ruvelo/magento2-security-alerts), without the framework.
