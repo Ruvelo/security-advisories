@@ -11,6 +11,14 @@ use JsonSerializable;
  */
 final readonly class Finding implements JsonSerializable
 {
+    /** The version of the shape toArray() gives and fromArray() reads. */
+    public const SHAPE = 1;
+
+    /**
+     * @param list<string> $aliases Other ids for the same vulnerability
+     * @param list<string> $links Further references besides $link
+     * @param array<string, scalar> $metadata What the adapter attached to the installed package (see InstalledPackage::$metadata)
+     */
     public function __construct(
         public Ecosystem $ecosystem,
         public string $package,
@@ -25,6 +33,9 @@ final readonly class Finding implements JsonSerializable
         public ?string $reportedAt = null,
         public ?KevEntry $exploited = null,
         public bool $isDev = false,
+        public array $aliases = [],
+        public array $links = [],
+        public array $metadata = [],
     ) {
     }
 
@@ -44,6 +55,9 @@ final readonly class Finding implements JsonSerializable
             reportedAt: $match->advisory->reportedAt,
             exploited: $exploited,
             isDev: $match->package->isDev,
+            aliases: $match->advisory->aliases,
+            links: $match->advisory->links,
+            metadata: $match->package->metadata,
         );
     }
 
@@ -78,6 +92,9 @@ final readonly class Finding implements JsonSerializable
             reportedAt: $string('reported_at'),
             exploited: is_array($data['kev'] ?? null) ? KevEntry::fromArray($data['kev']) : null,
             isDev: ($data['dev'] ?? false) === true,
+            aliases: self::strings($data['aliases'] ?? null),
+            links: self::strings($data['links'] ?? null),
+            metadata: self::scalars($data['meta'] ?? null),
         );
     }
 
@@ -107,11 +124,12 @@ final readonly class Finding implements JsonSerializable
     }
 
     /**
-     * @return array{key: string, ecosystem: string, package: string, installed: string, dev: bool, advisory_id: string, title: string, severity: string, link: string|null, cve: string|null, fixed_in: string|null, affected_versions: string|null, reported_at: string|null, exploited: bool, kev: array{cve: string, name: string, date_added: string, due_date: string|null, ransomware: bool}|null}
+     * @return array{v: int, key: string, ecosystem: string, package: string, installed: string, dev: bool, advisory_id: string, title: string, severity: string, link: string|null, cve: string|null, fixed_in: string|null, affected_versions: string|null, reported_at: string|null, exploited: bool, kev: array{cve: string, name: string, date_added: string, due_date: string|null, ransomware: bool}|null, aliases: list<string>, links: list<string>, meta: array<string, scalar>}
      */
     public function toArray(): array
     {
         return [
+            'v' => self::SHAPE,
             'key' => $this->key(),
             'ecosystem' => $this->ecosystem->value,
             'package' => $this->package,
@@ -127,7 +145,26 @@ final readonly class Finding implements JsonSerializable
             'reported_at' => $this->reportedAt,
             'exploited' => $this->isExploited(),
             'kev' => $this->exploited?->toArray(),
+            'aliases' => $this->aliases,
+            'links' => $this->links,
+            'meta' => $this->metadata,
         ];
+    }
+
+    /**
+     * @return list<string>
+     */
+    private static function strings(mixed $value): array
+    {
+        return is_array($value) ? array_values(array_filter($value, fn (mixed $item): bool => is_string($item) && $item !== '')) : [];
+    }
+
+    /**
+     * @return array<string, scalar>
+     */
+    private static function scalars(mixed $value): array
+    {
+        return is_array($value) ? array_filter($value, fn (mixed $item, mixed $key): bool => is_string($key) && is_scalar($item), ARRAY_FILTER_USE_BOTH) : [];
     }
 
     /**

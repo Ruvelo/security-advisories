@@ -20,6 +20,17 @@ Planned as 1.1.0. Backwards compatible: 1.0 adapters keep working unchanged.
 - `Advisory::$kev` and `Advisory::$kevKnown`, for sources that know the KEV verdict themselves; the catalogue is then only downloaded for the rest.
 - `JsonClient::postJsonRaw()` and `JsonClient::withDeadline()`, `ResponseCache::put()`.
 
+- `Report::$unchecked` (`UncheckedPackage`: the `InstalledPackage` and a reason): packages no advisory source covers (zip-installed plugins, say). They are an inventory, not a problem, so they no longer make `isComplete()` false. This replaces the "No advisory source covers ..." problem 1.0 added for them.
+- `Report::$notes` (`Note`: message, package, ecosystem, link) and `Report::hasNotes()`: non-fatal remarks such as "advisory found but affected versions unreadable, check by hand". Notes never block resolving. A source emits them by also implementing the optional `Sources\EmitsNotes`; sources that don't need no change. `FallbackAdvisorySource` passes the notes of whoever answered through.
+- `Scanner::forProject()` options: `ecosystems: [Ecosystem::Composer]` to read and ask about only some of Composer and npm, `extraSources` and `extraPackageSources` to add an adapter's own feeds and inventories, and `exploits` for another exploited-vulnerability catalogue.
+- Stored form: `Finding::toArray()` carries a shape version (`v`, `Finding::SHAPE`), `aliases`, `links` and `meta`; `Report::fromArray()` rebuilds a report (findings, unchecked packages, notes). Both read what 1.0 stored. `Report::toArray()` gains `unchecked`, `notes` and `v`.
+- Cross-source dedupe in the Scanner: the same vulnerability from two sources (same id, same CVE, or overlapping aliases, on the same package) is one finding. The match with exact ranges wins, then the one that names a fix; aliases and links are merged, and an exploited verdict from either is kept. `Sources\MatchMerger` is the implementation. `Advisory` gains `$aliases`, `$links` and `hasExactRanges()`; the catalogue is also asked about CVEs that only appear as aliases.
+- `JsonClient::getText()` for feeds that aren't JSON (markdown advisories), and `ResponseCache::rememberText()`, `getText()` and `putText()` so they can be cached (kept apart from the array entries).
+- `Http\CurlClient`: a small PSR-18 client on ext-curl, for platforms where discovery finds no client or a conflicting one. Verifies TLS, follows a few http(s) redirects, applies timeouts, throws `Http\CurlException` (a PSR-18 `NetworkExceptionInterface`) and takes an injectable transport.
+- `Cache\FileCache`: a PSR-16 cache in a directory for platforms without one. Hashed file names, atomic writes (temporary file, then rename), TTLs, an owner-only directory, and values read back without instantiating classes.
+- `InstalledPackage::$metadata` (`array<string, scalar>`, e.g. `active: false`, `source: 'zip'`), also accepted as `metadata` by `ExtensionList`, and passed through to `Finding::$metadata`.
+- `Finding::$aliases`, `$links` and `$metadata` (constructor arguments added at the end).
+
 ### Security
 
 - Fail-closed: while `Valtry\Keys` holds a placeholder, nothing is sent to Valtry, and CI refuses to build a release tag.

@@ -228,15 +228,18 @@ class ScannerTest extends TestCase
         $this->assertTrue((new Reconciler())->reconcile($known, $full)->isEmpty());
     }
 
-    public function testAnEcosystemWithoutASourceIsAProblem(): void
+    public function testAnEcosystemWithoutASourceIsInventoriedNotAProblem(): void
     {
         $scanner = new Scanner([new ExtensionList([['name' => 'com_x', 'version' => '1.0.0']])], [new PackagistAdvisorySource($this->http())]);
 
         $report = $scanner->scan();
 
-        $this->assertFalse($report->isComplete());
+        $this->assertTrue($report->isComplete());
+        $this->assertSame([], $report->problems);
         $this->assertSame([], $report->checked);
-        $this->assertStringContainsString('No advisory source covers extension packages', $report->problems[0]);
+        $this->assertCount(1, $report->unchecked);
+        $this->assertSame('com_x', $report->unchecked[0]->package->name);
+        $this->assertStringContainsString('No advisory source covers extension packages', $report->unchecked[0]->reason);
     }
 
     public function testAPlatformPlugsInItsOwnInventoryAndAdvisorySource(): void

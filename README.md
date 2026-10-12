@@ -53,8 +53,8 @@ exit($report->failsOn(Threshold::High) ? 1 : 0);
 | Class | What it is |
 |---|---|
 | `Scanner` | `scan(bool $fresh = false): Report`. Never throws for a missing file or a failing feed. |
-| `Report` | Immutable. `findings` (worst first), `counts()`, `worst()`, `exploited()`, `failing($t)`, `failsOn($t)`, `isClean()`, `isComplete()`, `problems`, `source` (`valtry`, `public` or `mixed`) and `sources` per ecosystem, `toArray()` / JSON. |
-| `Finding` | Immutable. Package, installed version, advisory id, title, link, CVE, `Severity` (including `NotRated`), `fixedIn`, `exploited` (a `KevEntry` with dates added and due, and ransomware use), `isDev`, and a stable `key()`. |
+| `Report` | Immutable. `findings` (worst first), `counts()`, `worst()`, `exploited()`, `failing($t)`, `failsOn($t)`, `isClean()`, `isComplete()`, `problems`, `unchecked` (packages no source covers: an inventory, not a problem), `notes` (non-fatal remarks), `toArray()` / `Report::fromArray()`, `source` (`valtry`, `public` or `mixed`) and `sources` per ecosystem, `toArray()` / JSON. |
+| `Finding` | Immutable. Package, installed version, advisory id, title, link, CVE, `Severity` (including `NotRated`), `fixedIn`, `exploited` (a `KevEntry` with dates added and due, and ransomware use), `isDev`, and a stable `key()`, `aliases`, `links`, the installed package's `metadata`, and `toArray()` / `Finding::fromArray()` in a versioned shape (`v`). |
 | `Reconciler` | `reconcile($known, $report, $lastSeen = []): Changes`, `next($known, $report, $unacknowledged = [])` and `lastSeen()`. Stores nothing. An incomplete report never resolves anything; unacknowledged keys stay news until delivered. |
 | `Versions` | `affects()` and `fixedIn()` on `composer/semver`. Follows patch lines and minor-split ranges; says `>2.10.1` when an advisory only names the last affected release. |
 
@@ -98,7 +98,7 @@ Everything goes through the PSR-18 client you give it, and is cached with PSR-16
 
 ## Extension points
 
-- **Another HTTP client:** any PSR-18 client with PSR-17 factories, through `JsonClient`. Timeouts and redirects are the client's settings (see the 5 seconds above for Valtry).
+- **Another HTTP client:** any PSR-18 client with PSR-17 factories, through `JsonClient` (`Http\CurlClient` if the platform has none). Timeouts and redirects are the client's settings (see the 5 seconds above for Valtry).
 - **Another primary source:** `FallbackAdvisorySource` takes any `AdvisorySource` first and a list of fallbacks, and reports which answered through `ReportsOrigin`.
 - **Another cache:** any PSR-16 cache, through `Scanner::forProject(cache: ...)` or `ResponseCache` for the individual sources.
 - **Extension inventories:** implement `PackageSource`, or pass a list to `ExtensionList` (Joomla extensions, PrestaShop modules, Shopware plugins). Packages that are also Composer packages use `Ecosystem::Composer` and Packagist covers them.
@@ -112,6 +112,36 @@ $scanner = new Scanner(
     new KevCatalogue(),
 );
 ```
+
+## Options for adapters
+
+```php
+$scanner = Scanner::forProject(
+    '/srv/shop',
+    cache: $cache,
+    ecosystems: [Ecosystem::Composer],                    // default: Composer and npm
+    extraSources: [new FriendsOfPrestaSource(/* ... */)], // asked besides the built-in ones
+    extraPackageSources: [new ExtensionList($modules)],   // read besides the lockfiles
+);
+```
+
+- **Unchecked packages.** An inventory entry whose ecosystem no source covers is listed in `$report->unchecked` (with the reason), and doesn't affect `isComplete()`. Only a source that fails does that.
+- **Notes.** A source that also implements `Sources\EmitsNotes` returns `Note`s after each `find()` (`new Note('Affected versions unreadable, check by hand.', Ecosystem::Extension, 'acme/plugin', $url)`); they land in `$report->notes` and never block resolving.
+- **Same vulnerability, two sources.** The Scanner keeps one finding per package and vulnerability (same id, CVE or an overlapping alias): the source with exact ranges wins, aliases and links are merged and "exploited" is kept if either has it. Give `Advisory` its `aliases` so overlaps are found.
+- **Persisting.** `$finding->toArray()` / `Finding::fromArray()` and `$report->toArray()` / `Report::fromArray()` are versioned (`v`) and read what 1.0 stored. Together with the Reconciler's `next()` and `lastSeen()` that is all an adapter needs to store.
+- **Package metadata.** `new InstalledPackage($ecosystem, $name, $version, metadata: ['active' => false, 'source' => 'zip'])` (or a `metadata` key in an `ExtensionList` array) arrives unchanged in `$finding->metadata`.
+- **Text feeds.** `$json->getText('Friends of Presta', $url)` returns the body as a string; `ResponseCache::rememberText()` caches it.
+- **No HTTP client, no cache?** `new JsonClient(new Http\CurlClient())` needs only ext-curl (and PSR-17 factories), and `new Cache\FileCache($dir)` is a PSR-16 cache in a directory.
+
+## Writing an adapter
+
+An adapter is a platform's glue: it knows what is installed, where to store results and how to tell people. The core does the rest.
+
+1. **Inventory.** Turn the platform's extension list into `InstalledPackage`s (an `ExtensionList`). Use `Ecosystem::Composer` or `Ecosystem::Npm` for what Packagist or OSV cover, `Ecosystem::Extension` for the rest, and `metadata` for what you want to show later.
+2. **Advisories.** For a platform feed, implement `AdvisorySource` (`supports()`, `find()`): return `AdvisoryMatch`es for the exact versions, fill `affectedVersions` when you can read the ranges, and throw `SourceUnavailable` if the feed can't be read in full. Implement `EmitsNotes` to flag what you couldn't judge.
+3. **Scan.** `Scanner::forProject($root, ecosystems: [...], extraSources: [...], extraPackageSources: [...])`, or `new Scanner(...)` when there is no lockfile. Pass your platform's PSR-18 client and PSR-16 cache through `JsonClient` and `cache:`, or the built-in `CurlClient` and `FileCache`.
+4. **Decide.** Show `$report->findings`; tell people when `! $report->isComplete()` (`problems`), and list `unchecked` and `notes` apart from findings.
+5. **Remember.** Store `$reconciler->next(...)`, `lastSeen(...)` and the report's `toArray()`, reconcile on the next run, and notify on `Changes::$new` and `Changes::$exploited`.
 
 ## Development
 

@@ -6,6 +6,7 @@ namespace Ruvelo\SecurityAdvisories;
 
 use DateTimeImmutable;
 use DateTimeInterface;
+use Exception;
 use JsonSerializable;
 
 /**
@@ -16,6 +17,9 @@ use JsonSerializable;
  */
 final readonly class Report implements JsonSerializable
 {
+    /** The version of the shape toArray() gives and fromArray() reads. */
+    public const SHAPE = 1;
+
     /** @var list<Finding> */
     public array $findings;
 
@@ -33,6 +37,8 @@ final readonly class Report implements JsonSerializable
      * @param list<string> $problems What couldn't be checked, in plain words
      * @param bool $kevChecked Whether the exploited-in-the-wild catalogue was read
      * @param array<string, string> $sources Which path answered each ecosystem (value => "valtry" or "public"), when the advisory source says
+     * @param list<UncheckedPackage> $unchecked Packages no advisory source covers: an inventory, not a problem, so they don't affect isComplete()
+     * @param list<Note> $notes Non-fatal remarks from the sources; they never block anything
      */
     public function __construct(
         array $findings,
@@ -42,6 +48,8 @@ final readonly class Report implements JsonSerializable
         public bool $kevChecked = true,
         public ?DateTimeImmutable $checkedAt = null,
         public array $sources = [],
+        public array $unchecked = [],
+        public array $notes = [],
     ) {
         usort($findings, Finding::compare(...));
         $this->findings = $findings;
@@ -65,6 +73,11 @@ final readonly class Report implements JsonSerializable
     public function isComplete(): bool
     {
         return $this->problems === [];
+    }
+
+    public function hasNotes(): bool
+    {
+        return $this->notes !== [];
     }
 
     public function isCheckedFor(Ecosystem $ecosystem): bool
@@ -139,7 +152,7 @@ final readonly class Report implements JsonSerializable
     }
 
     /**
-     * @return array{checked_at: string|null, clean: bool, complete: bool, kev_checked: bool, source: string, sources: array<string, string>, packages: array<string, int>, checked: list<string>, counts: array<string, int>, problems: list<string>, findings: list<array<string, mixed>>}
+     * @return array{checked_at: string|null, clean: bool, complete: bool, kev_checked: bool, source: string, sources: array<string, string>, packages: array<string, int>, checked: list<string>, counts: array<string, int>, problems: list<string>, unchecked: list<array<string, mixed>>, notes: list<array<string, mixed>>, findings: list<array<string, mixed>>, v: int}
      */
     public function toArray(): array
     {
@@ -154,8 +167,59 @@ final readonly class Report implements JsonSerializable
             'checked' => array_map(fn (Ecosystem $ecosystem): string => $ecosystem->value, $this->checked),
             'counts' => $this->counts(),
             'problems' => $this->problems,
+            'unchecked' => array_map(fn (UncheckedPackage $item): array => $item->toArray(), $this->unchecked),
+            'notes' => array_map(fn (Note $note): array => $note->toArray(), $this->notes),
             'findings' => array_map(fn (Finding $finding): array => $finding->toArray(), $this->findings),
+            'v' => self::SHAPE,
         ];
+    }
+
+    /**
+     * A report back from what toArray() gave (as an adapter stored it).
+     * Findings, unchecked packages and notes too incomplete to read are
+     * skipped; derived values (clean, counts, source) are recomputed.
+     *
+     * @param array<mixed> $data
+     */
+    public static function fromArray(array $data): self
+    {
+        $list = fn (string $key): array => is_array($data[$key] ?? null) ? array_values(array_filter($data[$key], 'is_array')) : [];
+        $strings = fn (string $key): array => is_array($data[$key] ?? null) ? array_values(array_filter($data[$key], 'is_string')) : [];
+
+        $packages = [];
+        foreach (is_array($data['packages'] ?? null) ? $data['packages'] : [] as $ecosystem => $count) {
+            if (is_string($ecosystem) && is_int($count)) {
+                $packages[$ecosystem] = $count;
+            }
+        }
+
+        $sources = [];
+        foreach (is_array($data['sources'] ?? null) ? $data['sources'] : [] as $ecosystem => $origin) {
+            if (is_string($ecosystem) && is_string($origin)) {
+                $sources[$ecosystem] = $origin;
+            }
+        }
+
+        $checkedAt = null;
+        if (is_string($data['checked_at'] ?? null)) {
+            try {
+                $checkedAt = new DateTimeImmutable($data['checked_at']);
+            } catch (Exception) {
+                $checkedAt = null;
+            }
+        }
+
+        return new self(
+            array_values(array_filter(array_map(Finding::fromArray(...), $list('findings')))),
+            $packages,
+            array_values(array_filter(array_map(fn (string $value): ?Ecosystem => Ecosystem::tryFrom($value), $strings('checked')))),
+            $strings('problems'),
+            ($data['kev_checked'] ?? true) !== false,
+            $checkedAt,
+            $sources,
+            array_values(array_filter(array_map(UncheckedPackage::fromArray(...), $list('unchecked')))),
+            array_values(array_filter(array_map(Note::fromArray(...), $list('notes')))),
+        );
     }
 
     /**

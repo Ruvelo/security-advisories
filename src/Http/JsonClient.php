@@ -55,6 +55,19 @@ final class JsonClient
     }
 
     /**
+     * A GET answered as text (markdown, plain text, HTML), for feeds that
+     * aren't JSON. Same retries and error handling as get().
+     *
+     * @param string $accept The Accept header to send
+     *
+     * @throws SourceUnavailable
+     */
+    public function getText(string $source, string $url, string $accept = 'text/plain, text/markdown, */*;q=0.5'): string
+    {
+        return $this->fetch($source, fn (): RequestInterface => $this->request('GET', $url)->withHeader('Accept', $accept));
+    }
+
+    /**
      * @param array<mixed> $body
      * @return array<mixed>
      *
@@ -179,6 +192,26 @@ final class JsonClient
      */
     private function send(string $source, callable $build): array
     {
+        $body = $this->fetch($source, $build);
+
+        try {
+            $data = json_decode($body, true, 512, JSON_THROW_ON_ERROR);
+        } catch (JsonException) {
+            throw SourceUnavailable::because($source, 'it didn\'t answer with JSON');
+        }
+
+        if (! is_array($data)) {
+            throw SourceUnavailable::because($source, 'it didn\'t answer with a JSON object');
+        }
+
+        return $data;
+    }
+
+    /**
+     * @param callable(): RequestInterface $build
+     */
+    private function fetch(string $source, callable $build): string
+    {
         $response = null;
         $failure = 'no answer';
 
@@ -210,16 +243,10 @@ final class JsonClient
         }
 
         try {
-            $data = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
-        } catch (JsonException) {
-            throw SourceUnavailable::because($source, 'it didn\'t answer with JSON');
+            return (string) $response->getBody();
+        } catch (Throwable $e) {
+            throw SourceUnavailable::because($source, $e->getMessage(), $e);
         }
-
-        if (! is_array($data)) {
-            throw SourceUnavailable::because($source, 'it didn\'t answer with a JSON object');
-        }
-
-        return $data;
     }
 
     private function request(string $method, string $url): RequestInterface

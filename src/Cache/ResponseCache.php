@@ -80,4 +80,52 @@ final class ResponseCache
 
         return is_array($value) ? $value : null;
     }
+
+    /**
+     * Like remember(), for a text response (markdown, plain text). Entries
+     * are kept apart from the array ones: a key never returns the wrong kind.
+     *
+     * @param Closure(): string $fetch
+     */
+    public function rememberText(string $key, int $ttl, bool $fresh, Closure $fetch): string
+    {
+        $cached = $fresh ? null : $this->getText($key, $ttl);
+
+        if ($cached !== null) {
+            return $cached;
+        }
+
+        $value = $fetch();
+        $this->putText($key, $value, $ttl);
+
+        return $value;
+    }
+
+    public function putText(string $key, string $value, int $ttl): void
+    {
+        if ($this->cache === null || $ttl <= 0) {
+            return;
+        }
+
+        try {
+            $this->cache->set(self::PREFIX.'text.'.$key, $value, $ttl);
+        } catch (Throwable) {
+            // Not worth failing a scan for.
+        }
+    }
+
+    public function getText(string $key, int $ttl): ?string
+    {
+        if ($this->cache === null || $ttl <= 0) {
+            return null;
+        }
+
+        try {
+            $value = $this->cache->get(self::PREFIX.'text.'.$key);
+        } catch (Throwable) {
+            return null;
+        }
+
+        return is_string($value) ? $value : null;
+    }
 }

@@ -20,7 +20,7 @@ final class ExtensionList implements PackageSource
     private readonly array $packages;
 
     /**
-     * @param iterable<InstalledPackage|array{name: string, version: string, dev?: bool}> $packages
+     * @param iterable<InstalledPackage|array{name: string, version: string, dev?: bool, metadata?: array<string, scalar>}> $packages
      */
     public function __construct(
         iterable $packages,
@@ -32,7 +32,7 @@ final class ExtensionList implements PackageSource
         foreach ($packages as $package) {
             $list[] = $package instanceof InstalledPackage
                 ? $package
-                : new InstalledPackage($this->ecosystem, $package['name'], $package['version'], $package['dev'] ?? false);
+                : new InstalledPackage($this->ecosystem, $package['name'], $package['version'], $package['dev'] ?? false, $package['metadata'] ?? []);
         }
 
         $this->packages = $list;

@@ -37,6 +37,7 @@
         "phpunit/phpunit": "^11.5|^12.0"
     },
     "suggest": {
+        "ext-curl": "Lets Http\\CurlClient act as a PSR-18 client where none is installed",
         "ext-sodium": "Verifies Valtry's signed answers (bundled with PHP; without it the public feeds are used)",
         "symfony/http-client": "A PSR-18 client for Symfony apps",
         "guzzlehttp/guzzle": "A PSR-18 client for anything else",

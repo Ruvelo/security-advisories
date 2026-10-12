@@ -8,6 +8,7 @@ use Ruvelo\SecurityAdvisories\AdvisoryMatch;
 use Ruvelo\SecurityAdvisories\Ecosystem;
 use Ruvelo\SecurityAdvisories\Exceptions\SourceUnavailable;
 use Ruvelo\SecurityAdvisories\InstalledPackage;
+use Ruvelo\SecurityAdvisories\Note;
 
 /**
  * Asks one source first and, for any ecosystem it can't answer in full
@@ -16,13 +17,16 @@ use Ruvelo\SecurityAdvisories\InstalledPackage;
  *
  * The default chain is Valtry first, then Packagist and OSV directly.
  */
-final class FallbackAdvisorySource implements AdvisorySource, ReportsOrigin
+final class FallbackAdvisorySource implements AdvisorySource, ReportsOrigin, EmitsNotes
 {
     /** @var array<string, string> Ecosystem value => origin */
     private array $origins = [];
 
     /** @var array<string, string> Ecosystem value => why the primary wasn't used */
     private array $reasons = [];
+
+    /** @var list<Note> */
+    private array $notes = [];
 
     /**
      * @param list<AdvisorySource> $fallbacks
@@ -57,12 +61,23 @@ final class FallbackAdvisorySource implements AdvisorySource, ReportsOrigin
             $byEcosystem[$package->ecosystem->value][] = $package;
         }
 
+        $this->notes = [];
         $matches = [];
         foreach ($byEcosystem as $value => $group) {
             array_push($matches, ...$this->findFor(Ecosystem::from($value), $group, $fresh));
         }
 
         return $matches;
+    }
+
+    /**
+     * The notes of whichever sources answered the last find().
+     *
+     * @return list<Note>
+     */
+    public function notes(): array
+    {
+        return $this->notes;
     }
 
     public function origin(Ecosystem $ecosystem): ?string
@@ -93,6 +108,7 @@ final class FallbackAdvisorySource implements AdvisorySource, ReportsOrigin
         if ($this->primary->supports($ecosystem)) {
             try {
                 $matches = $this->primary->find($packages, $fresh);
+                $this->collect($this->primary);
                 $this->origins[$ecosystem->value] = $this->primaryOrigin;
 
                 return $matches;
@@ -114,8 +130,16 @@ final class FallbackAdvisorySource implements AdvisorySource, ReportsOrigin
 
         foreach ($fallbacks as $fallback) {
             array_push($matches, ...$fallback->find($packages, $fresh));
+            $this->collect($fallback);
         }
 
         return $matches;
+    }
+
+    private function collect(AdvisorySource $source): void
+    {
+        if ($source instanceof EmitsNotes) {
+            array_push($this->notes, ...$source->notes());
+        }
     }
 }

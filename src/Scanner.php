@@ -15,9 +15,11 @@ use Ruvelo\SecurityAdvisories\Packages\ComposerLockReader;
 use Ruvelo\SecurityAdvisories\Packages\NpmLockReader;
 use Ruvelo\SecurityAdvisories\Packages\PackageSource;
 use Ruvelo\SecurityAdvisories\Sources\AdvisorySource;
+use Ruvelo\SecurityAdvisories\Sources\EmitsNotes;
 use Ruvelo\SecurityAdvisories\Sources\ExploitCatalogue;
 use Ruvelo\SecurityAdvisories\Sources\FallbackAdvisorySource;
 use Ruvelo\SecurityAdvisories\Sources\KevCatalogue;
+use Ruvelo\SecurityAdvisories\Sources\MatchMerger;
 use Ruvelo\SecurityAdvisories\Sources\OsvSource;
 use Ruvelo\SecurityAdvisories\Sources\PackagistAdvisorySource;
 use Ruvelo\SecurityAdvisories\Sources\ReportsOrigin;
@@ -60,6 +62,9 @@ final class Scanner
      *
      * @param string|null $source "valtry" (the default) or "public" to never contact Valtry; the RUVELO_ADVISORIES_SOURCE environment variable set to "public" wins over both
      * @param string $valtryUrl Where Valtry's Advisory API lives
+     * @param list<Ecosystem>|null $ecosystems Which of Composer and npm to read and check; null (the default) means both. Ecosystem::Extension has nothing built in: supply it through the two lists below
+     * @param list<AdvisorySource> $extraSources Further advisory sources, asked besides the built-in ones (an adapter's own feed)
+     * @param list<PackageSource> $extraPackageSources Further package lists, read besides the built-in lockfiles (an ExtensionList)
      */
     public static function forProject(
         string $directory,
@@ -69,18 +74,37 @@ final class Scanner
         Ttls $ttls = new Ttls(),
         ?string $source = null,
         string $valtryUrl = ValtryAdvisorySource::URL,
+        ?array $ecosystems = null,
+        array $extraSources = [],
+        array $extraPackageSources = [],
+        ?ExploitCatalogue $exploits = null,
     ): self {
         $http ??= new JsonClient();
         $responses = new ResponseCache($cache, $ttls);
         $directory = rtrim($directory, '/\\');
-        $public = [new PackagistAdvisorySource($http, $responses), new OsvSource($http, $responses)];
+        $wanted = fn (Ecosystem $ecosystem): bool => $ecosystems === null || in_array($ecosystem, $ecosystems, true);
+
+        $public = [];
+        $readers = [];
+        if ($wanted(Ecosystem::Composer)) {
+            $public[] = new PackagistAdvisorySource($http, $responses);
+            $readers[] = new ComposerLockReader($directory.'/composer.lock', $includeDev);
+        }
+        if ($wanted(Ecosystem::Npm)) {
+            $public[] = new OsvSource($http, $responses);
+            $readers[] = new NpmLockReader($directory.'/package-lock.json', $includeDev);
+        }
+
+        $built = match (true) {
+            $public === [] => [],
+            self::source($source) === self::SOURCE_PUBLIC => $public,
+            default => [new FallbackAdvisorySource(new ValtryAdvisorySource($http, $responses, $valtryUrl), $public)],
+        };
 
         return new self(
-            [new ComposerLockReader($directory.'/composer.lock', $includeDev), new NpmLockReader($directory.'/package-lock.json', $includeDev)],
-            self::source($source) === self::SOURCE_PUBLIC
-                ? $public
-                : [new FallbackAdvisorySource(new ValtryAdvisorySource($http, $responses, $valtryUrl), $public)],
-            new KevCatalogue($http, $responses),
+            [...$readers, ...$extraPackageSources],
+            [...$built, ...$extraSources],
+            $exploits ?? new KevCatalogue($http, $responses),
         );
     }
 
@@ -111,6 +135,8 @@ final class Scanner
         $checked = [];
         $matches = [];
         $origins = [];
+        $unchecked = [];
+        $notes = [];
 
         foreach ($lists as $ecosystem => $packages) {
             $ecosystem = Ecosystem::from($ecosystem);
@@ -118,7 +144,9 @@ final class Scanner
             $sources = array_values(array_filter($this->advisorySources, fn (AdvisorySource $source): bool => $source->supports($ecosystem)));
 
             if ($sources === []) {
-                $problems[] = "No advisory source covers {$ecosystem->label()} packages, so they weren't checked.";
+                foreach ($packages as $package) {
+                    $unchecked[] = new UncheckedPackage($package, "No advisory source covers {$ecosystem->label()} packages.");
+                }
 
                 continue;
             }
@@ -127,6 +155,10 @@ final class Scanner
             foreach ($sources as $source) {
                 try {
                     array_push($matches, ...$source->find($packages, $fresh));
+
+                    if ($source instanceof EmitsNotes) {
+                        array_push($notes, ...$source->notes());
+                    }
 
                     if ($source instanceof ReportsOrigin && ($origin = $source->origin($ecosystem)) !== null) {
                         $origins[$ecosystem->value] = $origin;
@@ -142,6 +174,9 @@ final class Scanner
             }
         }
 
+        // The same vulnerability from two sources is one finding.
+        $matches = MatchMerger::merge($matches);
+
         $exploited = [];
         $kevChecked = false;
 
@@ -151,7 +186,7 @@ final class Scanner
 
         if ($this->exploits !== null) {
             try {
-                $cves = array_values(array_unique(array_filter(array_map(fn (AdvisoryMatch $m): ?string => $m->advisory->cve, $unknown))));
+                $cves = array_values(array_unique(array_merge([], ...array_map(fn (AdvisoryMatch $m): array => MatchMerger::cves($m->advisory), $unknown))));
                 $exploited = $this->exploits->lookup($cves, $fresh);
                 $kevChecked = true;
             } catch (SourceUnavailable $e) {
@@ -161,16 +196,21 @@ final class Scanner
 
         $findings = [];
         foreach ($matches as $match) {
-            $kev = $match->advisory->kevKnown
-                ? $match->advisory->kev
-                : ($match->advisory->cve !== null ? ($exploited[strtoupper($match->advisory->cve)] ?? null) : null);
+            $kev = $match->advisory->kev;
+
+            if (! $match->advisory->kevKnown) {
+                foreach (MatchMerger::cves($match->advisory) as $cve) {
+                    $kev ??= $exploited[$cve] ?? null;
+                }
+            }
+
             $finding = Finding::from($match, $kev);
 
             // The same advisory can match two installed copies (npm): report it once.
             $findings[$finding->key()] ??= $finding;
         }
 
-        return new Report(array_values($findings), $counts, $checked, $problems, $kevChecked, new DateTimeImmutable(), $origins);
+        return new Report(array_values($findings), $counts, $checked, $problems, $kevChecked, new DateTimeImmutable(), $origins, $unchecked, self::distinct($notes));
     }
 
     /**
@@ -202,6 +242,20 @@ final class Scanner
         }
 
         return $lists;
+    }
+
+    /**
+     * @param list<Note> $notes
+     * @return list<Note>
+     */
+    private static function distinct(array $notes): array
+    {
+        $seen = [];
+        foreach ($notes as $note) {
+            $seen[json_encode($note->toArray())] ??= $note;
+        }
+
+        return array_values($seen);
     }
 
     private function capitalised(Ecosystem $ecosystem): string
