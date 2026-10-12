@@ -48,6 +48,40 @@ final readonly class Finding implements JsonSerializable
     }
 
     /**
+     * A finding back from what toArray() gave (as an adapter stored it).
+     * Null when the data is too incomplete to stand for a finding.
+     *
+     * @param array<mixed> $data
+     */
+    public static function fromArray(array $data): ?self
+    {
+        $ecosystem = is_string($data['ecosystem'] ?? null) ? Ecosystem::tryFrom($data['ecosystem']) : null;
+        $string = fn (string $key): ?string => is_string($data[$key] ?? null) && $data[$key] !== '' ? $data[$key] : null;
+        $package = $string('package');
+        $advisoryId = $string('advisory_id');
+
+        if ($ecosystem === null || $package === null || $advisoryId === null) {
+            return null;
+        }
+
+        return new self(
+            ecosystem: $ecosystem,
+            package: $package,
+            installed: $string('installed') ?? '',
+            advisoryId: $advisoryId,
+            title: $string('title') ?? $advisoryId,
+            severity: Severity::tryFrom($string('severity') ?? '') ?? Severity::NotRated,
+            link: $string('link'),
+            cve: $string('cve'),
+            fixedIn: $string('fixed_in'),
+            affectedVersions: $string('affected_versions'),
+            reportedAt: $string('reported_at'),
+            exploited: is_array($data['kev'] ?? null) ? KevEntry::fromArray($data['kev']) : null,
+            isDev: ($data['dev'] ?? false) === true,
+        );
+    }
+
+    /**
      * What identifies this finding across checks: the same advisory on the
      * same package is the same finding, whichever affected version is installed.
      * Adapters store it, and hand the stored keys back to the Reconciler.

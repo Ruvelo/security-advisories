@@ -125,4 +125,94 @@ class ReconcilerTest extends TestCase
 
         $this->assertTrue((new Reconciler())->reconcile($known, $this->report([ModelTest::finding('a/a', Severity::Critical)]))->isEmpty());
     }
+
+    public function testUnacknowledgedNewFindingsAreNewAgainNextTime(): void
+    {
+        $reconciler = new Reconciler();
+        $report = $this->report([ModelTest::finding('a/a'), ModelTest::finding('b/b')]);
+
+        // The alert for b/b couldn't be delivered.
+        $next = $reconciler->next([], $report, [$this->key('b/b')]);
+
+        $this->assertSame([$this->key('a/a') => false], $next);
+        $this->assertSame(['b/b'], array_map(fn (Finding $f): string => $f->package, $reconciler->reconcile($next, $report)->new));
+    }
+
+    public function testAnUnacknowledgedExploitedFlipIsNewsAgain(): void
+    {
+        $reconciler = new Reconciler();
+        $known = [$this->key('a/a') => false];
+        $report = $this->report([ModelTest::finding('a/a', kev: ModelTest::kev())]);
+
+        $next = $reconciler->next($known, $report, [$this->key('a/a') => true]);
+
+        $this->assertSame($known, $next, 'left as it was');
+        $this->assertCount(1, $reconciler->reconcile($next, $report)->exploited);
+    }
+
+    public function testAnUnacknowledgedResolutionIsResolvedAgain(): void
+    {
+        $reconciler = new Reconciler();
+        $known = [$this->key('a/a') => true, $this->key('b/b') => false];
+        $report = $this->report([ModelTest::finding('b/b')]);
+
+        $next = $reconciler->next($known, $report, [$this->key('a/a')]);
+
+        $this->assertEquals($known, $next);
+        $this->assertSame([$this->key('a/a')], $reconciler->reconcile($next, $report)->resolved);
+    }
+
+    public function testWithoutUnacknowledgedKeysNextIsUnchanged(): void
+    {
+        $known = [$this->key('a/a') => true];
+        $report = $this->report([ModelTest::finding('b/b')]);
+
+        $this->assertSame((new Reconciler())->next($known, $report), (new Reconciler())->next($known, $report, []));
+    }
+
+    public function testResolvedFindingsCarryWhatTheyWereLastSeenAs(): void
+    {
+        $reconciler = new Reconciler();
+        $first = $this->report([ModelTest::finding('a/a', kev: ModelTest::kev()), ModelTest::finding('b/b', Severity::Low)]);
+        $known = $reconciler->next([], $first);
+        $lastSeen = $reconciler->lastSeen([], $first, $known);
+
+        // What an adapter stores and reads back: plain arrays.
+        $lastSeen = json_decode((string) json_encode($lastSeen), true);
+        $this->assertIsArray($lastSeen);
+
+        $changes = $reconciler->reconcile($known, $this->report([ModelTest::finding('b/b', Severity::Low)]), $lastSeen);
+
+        $this->assertSame([$this->key('a/a')], $changes->resolved, 'the 1.0 field is unchanged');
+        $resolved = $changes->resolvedFinding($this->key('a/a'));
+        $this->assertNotNull($resolved);
+        $this->assertSame('a/a', $resolved->package);
+        $this->assertSame('Title', $resolved->title);
+        $this->assertSame(Severity::High, $resolved->severity);
+        $this->assertTrue($resolved->isExploited());
+        $this->assertNull($changes->resolvedFinding($this->key('b/b')));
+    }
+
+    public function testLastSeenKeepsWhatAnIncompleteReportCouldNotVouchFor(): void
+    {
+        $reconciler = new Reconciler();
+        $first = $this->report([ModelTest::finding('a/a'), ModelTest::finding('b/b')]);
+        $lastSeen = $reconciler->lastSeen([], $first, $reconciler->next([], $first));
+
+        $partial = $this->report([ModelTest::finding('b/b', Severity::Critical)], problems: ['OSV failed']);
+        $next = $reconciler->next($reconciler->next([], $first), $partial);
+        $kept = $reconciler->lastSeen($lastSeen, $partial, $next);
+
+        $this->assertSame([$this->key('a/a'), $this->key('b/b')], array_keys($kept));
+        $this->assertSame('critical', $kept[$this->key('b/b')]['severity'], 'refreshed from this report');
+        $this->assertSame('high', $kept[$this->key('a/a')]['severity'], 'kept as last seen');
+    }
+
+    public function testAResolvedKeyWithoutStoredDataStillResolves(): void
+    {
+        $changes = (new Reconciler())->reconcile([$this->key('a/a') => false], $this->report([]), ['other' => ['broken']]);
+
+        $this->assertSame([$this->key('a/a')], $changes->resolved);
+        $this->assertSame([], $changes->resolvedFindings);
+    }
 }
