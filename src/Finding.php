@@ -108,6 +108,32 @@ final readonly class Finding implements JsonSerializable
         return $this->ecosystem->value.':'.$this->package.':'.$this->advisoryId;
     }
 
+    /**
+     * Every other name this finding is known by: `ecosystem:package:<x>` for
+     * its advisory id, its CVE and each alias (upper-cased too, when that
+     * differs). key() is one of them when the id is the one it uses. The
+     * Reconciler matches on key() or any of these, so the same vulnerability
+     * stays the same finding when a different source wins the dedupe.
+     *
+     * @return list<string>
+     */
+    public function altKeys(): array
+    {
+        $keys = [];
+
+        foreach ([$this->advisoryId, $this->cve, ...$this->aliases] as $id) {
+            if ($id === null || $id === '') {
+                continue;
+            }
+
+            foreach ([$id, strtoupper($id)] as $variant) {
+                $keys[$this->ecosystem->value.':'.$this->package.':'.$variant] = true;
+            }
+        }
+
+        return array_keys($keys);
+    }
+
     public function isExploited(): bool
     {
         return $this->exploited !== null;

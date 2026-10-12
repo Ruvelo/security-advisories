@@ -9,7 +9,16 @@ namespace Ruvelo\SecurityAdvisories;
  *
  * It stores nothing: the adapter keeps the known set wherever it likes (a
  * table, a cache, a file) as finding key => was exploited, and passes it in.
- * The key is Finding::key().
+ * The key is Finding::key(), and a finding also counts as known when any of
+ * its Finding::altKeys() is: the same vulnerability reported under another id
+ * (a different source won the dedupe this time) is not news, and its old
+ * entry is not "resolved". For that to work from a known key alone the other
+ * way round too (the stored entry has the old id, the new finding only knows
+ * the CVE), pass lastSeen() as well: the old finding's own aliases and CVE
+ * are matched against the new ones.
+ *
+ * next() keeps the key a finding was first stored under, so the stored
+ * identity never churns when the winning id does.
  *
  * To say more than a key when something is resolved, keep lastSeen() beside
  * the known set and pass it to reconcile(): Changes::$resolvedFindings then
@@ -25,24 +34,23 @@ final class Reconciler
     {
         $new = [];
         $exploited = [];
-        $present = [];
+        $index = $this->index($known, $lastSeen);
 
         foreach ($report->findings as $finding) {
-            $key = $finding->key();
-            $present[$key] = true;
+            $matched = $this->matches($index, $finding);
 
-            if (! array_key_exists($key, $known)) {
+            if ($matched === []) {
                 $new[] = $finding;
             }
 
             // Once exploited, always exploited: an unreachable CISA feed must not lower the alarm,
             // and it only counts as news when it flips from not exploited to exploited.
-            if ($finding->isExploited() && ($known[$key] ?? false) === false) {
+            if ($finding->isExploited() && ! $this->anyExploited($known, $matched)) {
                 $exploited[] = $finding;
             }
         }
 
-        $resolved = $this->resolved($known, $present, $report);
+        $resolved = $this->resolved($known, $report, $lastSeen);
         $resolvedFindings = [];
 
         foreach ($resolved as $key) {
@@ -66,23 +74,40 @@ final class Reconciler
      * alert that couldn't be delivered is then news again next time (new,
      * newly exploited or resolved, whichever it was).
      *
+     * A finding already known under another key (see Finding::altKeys()) keeps
+     * the stored key; only a finding that is new is stored under its own key().
+     *
      * @param array<string, bool> $known
-     * @param list<string>|array<string, mixed> $unacknowledged Finding keys (as a list, or as array keys)
+     * @param list<string>|array<string, mixed> $unacknowledged Finding keys (as a list, or as array keys), stored or current
+     * @param array<string, Finding|array<mixed>> $lastSeen What lastSeen() gave last time; lets an entry be recognised by the CVE and aliases it had
      * @return array<string, bool>
      */
-    public function next(array $known, Report $report, array $unacknowledged = []): array
+    public function next(array $known, Report $report, array $unacknowledged = [], array $lastSeen = []): array
     {
         $next = $known;
+        $index = $this->index($known, $lastSeen);
 
-        foreach ($this->resolved($known, array_fill_keys(array_map(fn (Finding $f): string => $f->key(), $report->findings), true), $report) as $key) {
+        foreach ($this->resolved($known, $report, $lastSeen) as $key) {
             unset($next[$key]);
         }
 
+        $stored = [];
         foreach ($report->findings as $finding) {
-            $next[$finding->key()] = $finding->isExploited() || ($known[$finding->key()] ?? false);
+            $matched = $this->matches($index, $finding);
+            $key = $matched[0] ?? $finding->key();
+            $stored[$finding->key()] = $key;
+
+            $next[$key] = $finding->isExploited() || $this->anyExploited($known, $matched);
+
+            // Several old entries for one vulnerability collapse into the first.
+            foreach (array_slice($matched, 1) as $duplicate) {
+                unset($next[$duplicate]);
+            }
         }
 
         foreach (self::keys($unacknowledged) as $key) {
+            $key = array_key_exists($key, $known) ? $key : ($stored[$key] ?? $key);
+
             if (array_key_exists($key, $known)) {
                 $next[$key] = $known[$key];
             } else {
@@ -104,9 +129,10 @@ final class Reconciler
      */
     public function lastSeen(array $lastSeen, Report $report, array $next): array
     {
+        $index = $this->index($next, $lastSeen);
         $current = [];
         foreach ($report->findings as $finding) {
-            $current[$finding->key()] = $finding->toArray();
+            $current[$this->matches($index, $finding)[0] ?? $finding->key()] = $finding->toArray();
         }
 
         $out = [];
@@ -135,18 +161,93 @@ final class Reconciler
     }
 
     /**
-     * Only a complete report can say something is gone, and only for the
-     * ecosystems it checked: a failed feed or a missing lockfile never
-     * resolves anything.
+     * Known entries by every name they go by: the key itself, then (from
+     * lastSeen) the keys of the finding it was.
      *
      * @param array<string, bool> $known
-     * @param array<string, true> $present
+     * @param array<string, Finding|array<mixed>> $lastSeen
+     * @return array{exact: array<string, string>, alt: array<string, list<string>>}
+     */
+    private function index(array $known, array $lastSeen): array
+    {
+        $exact = [];
+        $alt = [];
+
+        foreach (array_keys($known) as $key) {
+            $exact[$key] = $key;
+            $data = $lastSeen[$key] ?? null;
+            $old = $data instanceof Finding ? $data : (is_array($data) ? Finding::fromArray($data) : null);
+
+            foreach ($old === null ? [] : [$old->key(), ...$old->altKeys()] as $name) {
+                $alt[$name][] = $key;
+            }
+        }
+
+        return ['exact' => $exact, 'alt' => $alt];
+    }
+
+    /**
+     * The known keys this finding is: its own key() first, then those that
+     * share one of its alt keys.
+     *
+     * @param array{exact: array<string, string>, alt: array<string, list<string>>} $index
      * @return list<string>
      */
-    private function resolved(array $known, array $present, Report $report): array
+    private function matches(array $index, Finding $finding): array
+    {
+        $found = [];
+
+        foreach ([$finding->key(), ...$finding->altKeys()] as $name) {
+            if (isset($index['exact'][$name])) {
+                $found[$name] = true;
+            }
+        }
+        foreach ([$finding->key(), ...$finding->altKeys()] as $name) {
+            foreach ($index['alt'][$name] ?? [] as $key) {
+                $found[$key] = true;
+            }
+        }
+
+        return array_keys($found);
+    }
+
+    /**
+     * @param array<string, bool> $known
+     * @param list<string> $keys
+     */
+    private function anyExploited(array $known, array $keys): bool
+    {
+        foreach ($keys as $key) {
+            if (($known[$key] ?? false) === true) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Only a complete report can say something is gone, and only for the
+     * ecosystems it checked: a failed feed or a missing lockfile never
+     * resolves anything. An entry matched by any current finding's key or
+     * alt key is not gone.
+     *
+     * @param array<string, bool> $known
+     * @param array<string, Finding|array<mixed>> $lastSeen
+     * @return list<string>
+     */
+    private function resolved(array $known, Report $report, array $lastSeen = []): array
     {
         if (! $report->isComplete()) {
             return [];
+        }
+
+        $index = $this->index($known, $lastSeen);
+        $present = [];
+        foreach ($report->findings as $finding) {
+            foreach ($this->matches($index, $finding) as $key) {
+                $present[$key] = true;
+            }
         }
 
         $resolved = [];

@@ -31,6 +31,8 @@ Planned as 1.1.0. Backwards compatible: 1.0 adapters keep working unchanged.
 - `InstalledPackage::$metadata` (`array<string, scalar>`, e.g. `active: false`, `source: 'zip'`), also accepted as `metadata` by `ExtensionList`, and passed through to `Finding::$metadata`.
 - `Finding::$aliases`, `$links` and `$metadata` (constructor arguments added at the end).
 
+- Stable finding identity: `Finding::altKeys()` (`ecosystem:package:<x>` for the id, CVE and every alias). The Reconciler counts a finding as known when its `key()` or any alt key is in the known set, carries the exploited state over the same way, and resolves only entries no current finding matches. `next()` keeps the key a finding was first stored under, so a different winning source or dedupe result is neither new nor resolved and no alert is re-sent. `key()` and 1.0 stored keys are unchanged. Pass `lastSeen()` data (new optional argument of `next()`, as `reconcile()` already took) so a stored entry is also recognised by the CVE and aliases it had.
+
 ### Security
 
 - Fail-closed: while `Valtry\Keys` holds a placeholder, nothing is sent to Valtry, and CI refuses to build a release tag.
