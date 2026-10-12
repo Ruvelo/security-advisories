@@ -48,6 +48,22 @@ final class ResponseCache
     }
 
     /**
+     * @param array<mixed> $value
+     */
+    public function put(string $key, array $value, int $ttl): void
+    {
+        if ($this->cache === null || $ttl <= 0) {
+            return;
+        }
+
+        try {
+            $this->cache->set(self::PREFIX.$key, $value, $ttl);
+        } catch (Throwable) {
+            // Not worth failing a scan for.
+        }
+    }
+
+    /**
      * @return array<mixed>|null
      */
     public function get(string $key, int $ttl): ?array

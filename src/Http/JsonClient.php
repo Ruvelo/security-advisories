@@ -83,6 +83,97 @@ final class JsonClient
     }
 
     /**
+     * One POST of a JSON body, answered as it came: status, headers and the
+     * raw body (what a signature covers). Tried once: a caller with a
+     * fallback would rather use it than wait for a second attempt.
+     *
+     * @param array<mixed> $body
+     * @param array<string, string> $headers
+     * @return array{status: int, headers: array<string, string>, body: string}
+     *
+     * @throws SourceUnavailable When there is no answer at all
+     */
+    public function postJsonRaw(string $source, string $url, array $body, array $headers = []): array
+    {
+        $json = json_encode($body, JSON_UNESCAPED_SLASHES);
+        $request = $this->request('POST', $url)
+            ->withHeader('Content-Type', 'application/json')
+            ->withBody($this->streams()->createStream($json === false ? '{}' : $json));
+
+        foreach ($headers as $name => $value) {
+            $request = $request->withHeader($name, $value);
+        }
+
+        try {
+            $response = $this->client()->sendRequest($request);
+            $content = (string) $response->getBody();
+        } catch (SourceUnavailable $e) {
+            throw $e;
+        } catch (Throwable $e) {
+            throw SourceUnavailable::because($source, $e->getMessage(), $e);
+        }
+
+        $flat = [];
+        foreach (array_keys($response->getHeaders()) as $name) {
+            $flat[strtolower((string) $name)] = $response->getHeaderLine((string) $name);
+        }
+
+        return ['status' => $response->getStatusCode(), 'headers' => $flat, 'body' => $content];
+    }
+
+    /**
+     * A copy whose requests give up after $seconds, for a source with a
+     * fallback behind it. Your own client is kept as it is unless it can
+     * derive a copy with new options (Symfony's Psr18Client can); without a
+     * client of your own, one with that timeout is built from Symfony
+     * HttpClient or Guzzle when either is installed. Otherwise the deadline is
+     * the client's own: callers measure and treat a slow answer as none.
+     */
+    public function withDeadline(float $seconds): self
+    {
+        $client = $this->client === null ? self::timedClient($seconds) : self::retimed($this->client, $seconds);
+
+        return new self($client ?? $this->client, $this->requests, $this->streams, $this->userAgent, 1);
+    }
+
+    private static function retimed(ClientInterface $client, float $seconds): ClientInterface
+    {
+        if (method_exists($client, 'withOptions')) {
+            try {
+                $copy = $client->withOptions(['timeout' => $seconds, 'max_duration' => $seconds]);
+
+                return $copy instanceof ClientInterface ? $copy : $client;
+            } catch (Throwable) {
+                return $client;
+            }
+        }
+
+        return $client;
+    }
+
+    private static function timedClient(float $seconds): ?ClientInterface
+    {
+        // Named as strings: both are optional, so neither is a dependency.
+        $symfony = 'Symfony\\Component\\HttpClient\\Psr18Client';
+        $factory = 'Symfony\\Component\\HttpClient\\HttpClient';
+        $guzzle = 'GuzzleHttp\\Client';
+
+        try {
+            if (class_exists($symfony) && class_exists($factory)) {
+                $client = new $symfony($factory::create(['timeout' => $seconds, 'max_duration' => $seconds]));
+            } elseif (class_exists($guzzle)) {
+                $client = new $guzzle(['timeout' => $seconds, 'connect_timeout' => min($seconds, 3.0)]);
+            } else {
+                return null;
+            }
+        } catch (Throwable) {
+            return null;
+        }
+
+        return $client instanceof ClientInterface ? $client : null;
+    }
+
+    /**
      * @param callable(): RequestInterface $build
      * @return array<mixed>
      */

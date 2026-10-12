@@ -1,6 +1,6 @@
 {
     "name": "ruvelo/security-advisories",
-    "description": "The framework-agnostic core behind Ruvelo's security alerts: reads lockfiles, matches Packagist and OSV advisories, marks what CISA KEV says is exploited, and tells you what changed.",
+    "description": "The framework-agnostic core behind Ruvelo's security alerts: reads lockfiles, matches advisories from Valtry's signed API or Packagist and OSV directly, marks what CISA KEV says is exploited, and tells you what changed.",
     "keywords": [
         "security",
         "vulnerabilities",
@@ -37,6 +37,7 @@
         "phpunit/phpunit": "^11.5|^12.0"
     },
     "suggest": {
+        "ext-sodium": "Verifies Valtry's signed answers (bundled with PHP; without it the public feeds are used)",
         "symfony/http-client": "A PSR-18 client for Symfony apps",
         "guzzlehttp/guzzle": "A PSR-18 client for anything else",
         "nyholm/psr7": "PSR-17 factories, if your app has none"

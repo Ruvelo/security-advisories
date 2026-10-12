@@ -16,9 +16,12 @@ use Ruvelo\SecurityAdvisories\Packages\NpmLockReader;
 use Ruvelo\SecurityAdvisories\Packages\PackageSource;
 use Ruvelo\SecurityAdvisories\Sources\AdvisorySource;
 use Ruvelo\SecurityAdvisories\Sources\ExploitCatalogue;
+use Ruvelo\SecurityAdvisories\Sources\FallbackAdvisorySource;
 use Ruvelo\SecurityAdvisories\Sources\KevCatalogue;
 use Ruvelo\SecurityAdvisories\Sources\OsvSource;
 use Ruvelo\SecurityAdvisories\Sources\PackagistAdvisorySource;
+use Ruvelo\SecurityAdvisories\Sources\ReportsOrigin;
+use Ruvelo\SecurityAdvisories\Valtry\ValtryAdvisorySource;
 
 /**
  * Reads the package lists, asks the advisory sources about the installed
@@ -28,6 +31,15 @@ use Ruvelo\SecurityAdvisories\Sources\PackagistAdvisorySource;
  */
 final class Scanner
 {
+    /** Valtry first, the public feeds when it can't answer. */
+    public const SOURCE_VALTRY = 'valtry';
+
+    /** Packagist, OSV and CISA KEV directly: nothing is sent to Valtry. */
+    public const SOURCE_PUBLIC = 'public';
+
+    /** Set to "public" to keep every scan off Valtry, whatever the code passes. */
+    public const ENV = 'RUVELO_ADVISORIES_SOURCE';
+
     /**
      * @param list<PackageSource> $packageSources
      * @param list<AdvisorySource> $advisorySources
@@ -40,21 +52,51 @@ final class Scanner
     }
 
     /**
-     * The usual setup for a project directory: composer.lock through
-     * Packagist, package-lock.json (if there is one) through OSV, and CISA KEV.
-     * Pass a client and a cache to use the platform's own.
+     * The usual setup for a project directory: composer.lock and
+     * package-lock.json (if there is one), checked through Valtry's signed
+     * Advisory API (names only), with Packagist, OSV and CISA KEV directly
+     * whenever Valtry can't answer. Pass a client and a cache to use the
+     * platform's own.
+     *
+     * @param string|null $source "valtry" (the default) or "public" to never contact Valtry; the RUVELO_ADVISORIES_SOURCE environment variable set to "public" wins over both
+     * @param string $valtryUrl Where Valtry's Advisory API lives
      */
-    public static function forProject(string $directory, ?JsonClient $http = null, ?CacheInterface $cache = null, bool $includeDev = true, Ttls $ttls = new Ttls()): self
-    {
+    public static function forProject(
+        string $directory,
+        ?JsonClient $http = null,
+        ?CacheInterface $cache = null,
+        bool $includeDev = true,
+        Ttls $ttls = new Ttls(),
+        ?string $source = null,
+        string $valtryUrl = ValtryAdvisorySource::URL,
+    ): self {
         $http ??= new JsonClient();
         $responses = new ResponseCache($cache, $ttls);
         $directory = rtrim($directory, '/\\');
+        $public = [new PackagistAdvisorySource($http, $responses), new OsvSource($http, $responses)];
 
         return new self(
             [new ComposerLockReader($directory.'/composer.lock', $includeDev), new NpmLockReader($directory.'/package-lock.json', $includeDev)],
-            [new PackagistAdvisorySource($http, $responses), new OsvSource($http, $responses)],
+            self::source($source) === self::SOURCE_PUBLIC
+                ? $public
+                : [new FallbackAdvisorySource(new ValtryAdvisorySource($http, $responses, $valtryUrl), $public)],
             new KevCatalogue($http, $responses),
         );
+    }
+
+    /**
+     * The path to use: "public" when the environment or the caller says so, else "valtry".
+     */
+    public static function source(?string $requested = null): string
+    {
+        $env = getenv(self::ENV);
+        $env = is_string($env) && $env !== '' ? $env : ($_SERVER[self::ENV] ?? $_ENV[self::ENV] ?? null);
+
+        if (is_string($env) && strtolower(trim($env)) === self::SOURCE_PUBLIC) {
+            return self::SOURCE_PUBLIC;
+        }
+
+        return $requested !== null && strtolower(trim($requested)) === self::SOURCE_PUBLIC ? self::SOURCE_PUBLIC : self::SOURCE_VALTRY;
     }
 
     /**
@@ -68,6 +110,7 @@ final class Scanner
         $counts = [];
         $checked = [];
         $matches = [];
+        $origins = [];
 
         foreach ($lists as $ecosystem => $packages) {
             $ecosystem = Ecosystem::from($ecosystem);
@@ -84,6 +127,10 @@ final class Scanner
             foreach ($sources as $source) {
                 try {
                     array_push($matches, ...$source->find($packages, $fresh));
+
+                    if ($source instanceof ReportsOrigin && ($origin = $source->origin($ecosystem)) !== null) {
+                        $origins[$ecosystem->value] = $origin;
+                    }
                 } catch (SourceUnavailable $e) {
                     $problems[] = $e->getMessage()." {$this->capitalised($ecosystem)} packages weren't checked.";
                     $complete = false;
@@ -98,9 +145,13 @@ final class Scanner
         $exploited = [];
         $kevChecked = false;
 
+        // Advisories from Valtry already carry their KEV verdict: the
+        // catalogue is only downloaded for the rest.
+        $unknown = array_values(array_filter($matches, fn (AdvisoryMatch $m): bool => ! $m->advisory->kevKnown));
+
         if ($this->exploits !== null) {
             try {
-                $cves = array_values(array_unique(array_filter(array_map(fn (AdvisoryMatch $m): ?string => $m->advisory->cve, $matches))));
+                $cves = array_values(array_unique(array_filter(array_map(fn (AdvisoryMatch $m): ?string => $m->advisory->cve, $unknown))));
                 $exploited = $this->exploits->lookup($cves, $fresh);
                 $kevChecked = true;
             } catch (SourceUnavailable $e) {
@@ -110,13 +161,16 @@ final class Scanner
 
         $findings = [];
         foreach ($matches as $match) {
-            $finding = Finding::from($match, $match->advisory->cve !== null ? ($exploited[strtoupper($match->advisory->cve)] ?? null) : null);
+            $kev = $match->advisory->kevKnown
+                ? $match->advisory->kev
+                : ($match->advisory->cve !== null ? ($exploited[strtoupper($match->advisory->cve)] ?? null) : null);
+            $finding = Finding::from($match, $kev);
 
             // The same advisory can match two installed copies (npm): report it once.
             $findings[$finding->key()] ??= $finding;
         }
 
-        return new Report(array_values($findings), $counts, $checked, $problems, $kevChecked, new DateTimeImmutable());
+        return new Report(array_values($findings), $counts, $checked, $problems, $kevChecked, new DateTimeImmutable(), $origins);
     }
 
     /**

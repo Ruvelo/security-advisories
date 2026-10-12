@@ -20,11 +20,19 @@ final readonly class Report implements JsonSerializable
     public array $findings;
 
     /**
+     * Where the advisories came from: "valtry" (Valtry's signed Advisory API),
+     * "public" (Packagist, OSV and CISA KEV directly) or "mixed" when
+     * ecosystems differed. See $sources for each ecosystem.
+     */
+    public string $source;
+
+    /**
      * @param list<Finding> $findings
      * @param array<string, int> $packages Packages checked, by ecosystem value
      * @param list<Ecosystem> $checked Ecosystems whose advisories were fetched in full; only these can mark findings as fixed
      * @param list<string> $problems What couldn't be checked, in plain words
      * @param bool $kevChecked Whether the exploited-in-the-wild catalogue was read
+     * @param array<string, string> $sources Which path answered each ecosystem (value => "valtry" or "public"), when the advisory source says
      */
     public function __construct(
         array $findings,
@@ -33,9 +41,17 @@ final readonly class Report implements JsonSerializable
         public array $problems = [],
         public bool $kevChecked = true,
         public ?DateTimeImmutable $checkedAt = null,
+        public array $sources = [],
     ) {
         usort($findings, Finding::compare(...));
         $this->findings = $findings;
+
+        $paths = array_values(array_unique($sources));
+        $this->source = match (true) {
+            $paths === [] => 'public',
+            count($paths) === 1 => $paths[0],
+            default => 'mixed',
+        };
     }
 
     public function isClean(): bool
@@ -123,7 +139,7 @@ final readonly class Report implements JsonSerializable
     }
 
     /**
-     * @return array{checked_at: string|null, clean: bool, complete: bool, kev_checked: bool, packages: array<string, int>, checked: list<string>, counts: array<string, int>, problems: list<string>, findings: list<array<string, mixed>>}
+     * @return array{checked_at: string|null, clean: bool, complete: bool, kev_checked: bool, source: string, sources: array<string, string>, packages: array<string, int>, checked: list<string>, counts: array<string, int>, problems: list<string>, findings: list<array<string, mixed>>}
      */
     public function toArray(): array
     {
@@ -132,6 +148,8 @@ final readonly class Report implements JsonSerializable
             'clean' => $this->isClean(),
             'complete' => $this->isComplete(),
             'kev_checked' => $this->kevChecked,
+            'source' => $this->source,
+            'sources' => $this->sources,
             'packages' => $this->packages,
             'checked' => array_map(fn (Ecosystem $ecosystem): string => $ecosystem->value, $this->checked),
             'counts' => $this->counts(),

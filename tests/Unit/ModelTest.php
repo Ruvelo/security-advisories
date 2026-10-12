@@ -142,4 +142,21 @@ class ModelTest extends TestCase
         $this->assertNull(KevEntry::fromCatalogue(['cveID' => 'CVE-1', 'dateAdded' => 'yesterday']));
         $this->assertNull(KevEntry::fromCatalogue(['dateAdded' => '2026-03-20']));
     }
+
+    public function testAFindingSurvivesARoundTripThroughItsArray(): void
+    {
+        $finding = new Finding(Ecosystem::Npm, '@scope/pkg', '1.2.0', 'GHSA-1', 'Title', Severity::Critical, 'https://x', 'CVE-2026-1', '1.2.1', '<1.2.1', '2026-01-01', self::kev(), true);
+
+        $this->assertEquals($finding, Finding::fromArray($finding->toArray()));
+        $this->assertNull(Finding::fromArray(['package' => 'a/a']));
+        $this->assertNull(Finding::fromArray(['ecosystem' => 'pypi', 'package' => 'a', 'advisory_id' => 'X']));
+    }
+
+    public function testAReportSaysWhichPathAnswered(): void
+    {
+        $this->assertSame('public', (new Report([]))->source);
+        $this->assertSame('valtry', (new Report([], sources: ['composer' => 'valtry', 'npm' => 'valtry']))->source);
+        $this->assertSame('mixed', (new Report([], sources: ['composer' => 'valtry', 'npm' => 'public']))->source);
+        $this->assertSame(['composer' => 'valtry'], (new Report([], sources: ['composer' => 'valtry']))->toArray()['sources']);
+    }
 }
