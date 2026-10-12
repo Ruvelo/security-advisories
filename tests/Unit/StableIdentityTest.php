@@ -145,7 +145,7 @@ class StableIdentityTest extends TestCase
         $r = new Reconciler();
 
         $this->assertSame(['composer:acme/lib:OTHER-9'], $r->reconcile($known, $report)->resolved);
-        $this->assertSame(['composer:acme/lib:GHSA-1' => false], $r->next($known, $report), 'two old entries for one vulnerability collapse into the first');
+        $this->assertSame(['composer:acme/lib:CVE-2026-0001' => false], $r->next($known, $report), 'two old entries for one vulnerability collapse into the first');
     }
 
     public function testAnUnacknowledgedCurrentKeyHoldsTheStoredEntry(): void
