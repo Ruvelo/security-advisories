@@ -102,13 +102,13 @@ class ScannerTest extends TestCase
 
     public function testForProjectReadsBothLockfilesAndFlagsDevPackages(): void
     {
-        $report = Scanner::forProject(self::FIXTURES, $this->http())->scan();
+        $report = Scanner::forProject(self::FIXTURES, $this->http(), source: 'public')->scan();
 
         $this->assertSame(['composer' => 73, 'npm' => 38], $report->packages);
         $this->assertTrue($report->isComplete());
         $this->assertGreaterThanOrEqual(13, count($report->findings));
 
-        $withoutDev = Scanner::forProject(self::FIXTURES, $this->http(), includeDev: false)->scan();
+        $withoutDev = Scanner::forProject(self::FIXTURES, $this->http(), includeDev: false, source: 'public')->scan();
         $this->assertSame(67, $withoutDev->packageCount(Ecosystem::Composer));
     }
 
@@ -133,7 +133,7 @@ class ScannerTest extends TestCase
     public function testASecondScanComesFromTheCache(): void
     {
         $cache = new ArrayCache();
-        $scanner = Scanner::forProject(self::FIXTURES, $this->http(), $cache);
+        $scanner = Scanner::forProject(self::FIXTURES, $this->http(), $cache, source: 'public');
 
         $scanner->scan();
         $sent = count($this->client->requests);
@@ -151,7 +151,7 @@ class ScannerTest extends TestCase
         $dir = sys_get_temp_dir().'/advisories-'.bin2hex(random_bytes(4));
         mkdir($dir);
 
-        $report = Scanner::forProject($dir, $this->http())->scan();
+        $report = Scanner::forProject($dir, $this->http(), source: 'public')->scan();
         rmdir($dir);
 
         $this->assertSame([], $report->findings);

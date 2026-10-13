@@ -312,15 +312,15 @@ class ValtrySourceTest extends TestCase
 
     public function testForProjectStillWorksTheOneOhWay(): void
     {
-        // 1.0 adapters pass positional arguments only; with placeholder keys this is the public path, unchanged.
+        // 1.0 adapters pass positional arguments only. With real keys pinned they try valtry.co.uk first;
+        // when it can't answer they get the public path, unchanged.
+        $this->client->on('POST', 'valtry.co.uk', $this->client->json(['v' => 1, 'error' => 'unavailable'], 503));
         $report = Scanner::forProject(self::FIXTURES, $this->http(), null, false)->scan();
         $public = Scanner::forProject(self::FIXTURES, $this->http(), null, false, source: 'public')->scan();
 
         $this->assertTrue($report->isComplete());
         $this->assertEquals($public->findings, $report->findings);
-        if (Keys::hasPlaceholders()) {
-            $this->assertSame('public', $report->source);
-        }
+        $this->assertSame('public', $report->source);
     }
 
     public function testAdvisoriesMapOntoTheExistingModel(): void

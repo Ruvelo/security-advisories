@@ -25,7 +25,7 @@ final class Keys
 
     /** kid => base64 Ed25519 public key (32 bytes). */
     public const PINNED = [
-        'valtry-1' => self::PLACEHOLDER,
+        'valtry-2026-10' => 'SPmNLIp9RTLYEZeBD2qy4vMwiGsw279qsgUbH5K+ekw=',
     ];
 
     /**
