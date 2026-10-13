@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.1.0] - 2026-10-13
 
 Planned as 1.1.0. Backwards compatible: 1.0 adapters keep working unchanged.
 
@@ -53,5 +53,5 @@ First release: the logic of [Laravel Security Alerts](https://github.com/Ruvelo/
 - `Reconciler`: given the finding keys an adapter already knows, returns what is new, what became exploited and what is resolved, storing nothing. An incomplete report never resolves anything, and exploited never goes back to not exploited.
 - Exceptions extending `SecurityAdvisoriesException`: `SourceUnavailable`, `PackagesUnreadable`, `InvalidThreshold`.
 
-[Unreleased]: https://github.com/Ruvelo/security-advisories/compare/v1.0.0...HEAD
+[1.1.0]: https://github.com/Ruvelo/security-advisories/releases/tag/v1.1.0
 [1.0.0]: https://github.com/Ruvelo/security-advisories/releases/tag/v1.0.0
